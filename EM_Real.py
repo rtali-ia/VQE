@@ -1,6 +1,5 @@
-#%%
 ############################################
-#EM - VHA
+#EM - Real
 ############################################
 
 ############################################
@@ -72,13 +71,13 @@ class EMSummary(base):
     atype = Column(String)
 
 
+##################################
+      #Define Basics
+##################################
 
 # single qubit basis states |0> and |1>
 q0 = np.array([[1],[0]])
 q1 = np.array([[0],[1]])
-
-#Init State
-init_all_zero = np.kron(np.kron(np.kron(q0,q0),q0),q0)
 
 # Pauli Matrices
 I  = np.array([[ 1, 0],[ 0, 1]])
@@ -86,23 +85,23 @@ X = np.array([[ 0, 1],[ 1, 0]])
 Y = np.array([[ 0,-1j],[1j, 0]])
 Z = np.array([[ 1, 0],[ 0,-1]])
 HG = (1/np.sqrt(2))*np.array([[1,1],[1,-1]])
-                             
 
+#Creates the all zero input state.                            
 def all_Zero_State(n_qubits):
         
    if n_qubits < 2:
        return 'Invalid Input : Specify at least 2 qubits'
             
    else:
-            #Init State
+       #Init State
        init_all_zero = np.kron(q0,q0)
             
        for t in range(n_qubits - 2):
            init_all_zero = np.kron(init_all_zero,q0)
                 
-       return init_all_zero                            
-                             
-
+       return init_all_zero                
+   
+   
 
 #Creates Random Initial State Ansatz
 def psi0(n_qubits):
@@ -122,8 +121,9 @@ def psi0(n_qubits):
            inow = np.cos(pick)*q0 + np.sin(pick)*q1
            init_random = np.kron(init_random, inow)
                 
-       return init_random
+       return init_random            
 
+#Creates the equally superimposed product state from all zero state.                           
 def equal_Superposition(n_qubits, init_all_zero):
         
     if n_qubits < 2:
@@ -140,8 +140,7 @@ def equal_Superposition(n_qubits, init_all_zero):
                 
         return equal_Superpos
     
-    
-#Analytical Ground State
+#Analytical Ground State using Numpy's inbuilt eigh function.
 def get_analytical_ground_state(H):
   e, v = LA.eigh(H)
   return np.min(e), v[:,np.argmin(e)]
@@ -152,64 +151,53 @@ def CU(Q, theta, n_qubits):
   Id = np.eye(2**n_qubits)
   return np.cos(theta)*Id - 1j*np.sin(theta)*Q
 
-#Ansatz Circuit 
-
-
-def ansatz_vha(X_param_set, ZZ_param_set, components, n_qubits, layers):
-
+#Define Real Ansatz
+def ansatz_real(YZ_param_set, Y_param_set , real_comps, n_qubits, layers):
+    
   #Initialize Ansatz to I
   ansatz = np.eye(2**n_qubits)
   
-  ZZ_components = components[0]
-  X_components = components[1]
+  YZ_components = real_comps[0]
+  Y_components = real_comps[1]
 
   for layer in range(layers):
     
-    for ct1, comp1 in enumerate(ZZ_components):
-      ansatz = CU(comp1, theta = ZZ_param_set[layer],n_qubits=n_qubits)@ansatz
+    for ct1, comp1 in enumerate(YZ_components):
+      ansatz = CU(comp1, theta = YZ_param_set[layer],n_qubits=n_qubits)@ansatz
 
-    for ct2, comp2 in enumerate(X_components):
-      ansatz = CU(comp2,  theta = X_param_set[layer],n_qubits=n_qubits)@ansatz
+    for ct2, comp2 in enumerate(Y_components):
+      ansatz = CU(comp2,  theta = Y_param_set[layer],n_qubits=n_qubits)@ansatz
 
   return ansatz
 
 
+##################################
+      #Define TFIM model
+##################################
 
-#This funaction calculates the overlap of the solution with analytical ground state.
-def overlap_calculator(min_pm, ground_st):
-    return np.abs(np.vdot(min_pm, ground_st))**2
-    
-def power_computation(H, circuit_input):
-    return (1/(LA.norm(H@circuit_input)))*(H@circuit_input)
-
-def energy_raw(H,psi):
-    return np.real((psi.conj().T)@H@psi)[0][0]
-
-def get_eta(eta_in, grad_prev, grad_now):
-    return eta_in*grad_now/grad_prev
-
-#Expectation
-def energy_VHA(H,components, circuit_input, X_param_set, ZZ_param_set, n_qubits , layers):
-  psi = ansatz_vha(X_param_set = X_param_set, ZZ_param_set = ZZ_param_set, components = components, 
-                   n_qubits = n_qubits, layers=layers)@circuit_input
-  return np.real((psi.conj().T)@H@psi)[0][0]
-
-
-
-#Define TFIM model
-
-def component_sums(components, n_qubits):
+#helper funnction for TFIM model creation.
+def component_sums(components, real_comps, n_qubits):
 
   ZZ_sum = np.zeros((2**n_qubits,2**n_qubits))
   X_sum = np.zeros((2**n_qubits,2**n_qubits))
-
+  Y_sum = np.zeros((2**n_qubits,2**n_qubits),dtype=complex)
+  YZ_sum = np.zeros((2**n_qubits,2**n_qubits),dtype=complex)
+  
   for zz_arr in components[0]:
     ZZ_sum += zz_arr
 
   for x_arr in components[1]:
     X_sum += x_arr
+    
+  for yz_arr in real_comps[0]:
+    YZ_sum += yz_arr
 
-  return ZZ_sum, X_sum
+  for y_arr in real_comps[1]:
+    Y_sum += y_arr
+
+  return ZZ_sum, X_sum, Y_sum, YZ_sum
+
+
 
 def array_coding_to_kron(arr, type):
   n_qubits = len(arr)
@@ -222,6 +210,22 @@ def array_coding_to_kron(arr, type):
 
     return expr
 
+  elif type == 'YZ':
+    convert = {0 : I, 1 : Z, -1 : Y} #Dictionary that maps code to Pauli Matrix
+    expr4 = np.kron(convert[arr[0]],convert[arr[1]])
+    for p in range(2, n_qubits):
+      expr4 = np.kron(expr4,convert[arr[p]])
+
+    return expr4
+
+  elif type == 'Y':
+    convert = {0 : I, 1 : Y}
+    expr3 = np.kron(convert[arr[0]],convert[arr[1]])
+    for s in range(2, n_qubits):
+      expr3 = np.kron(expr3,convert[arr[s]])
+      
+    return expr3
+
   else:
     convert = {0 : I, 1 : X}
     expr2 = np.kron(convert[arr[0]],convert[arr[1]])
@@ -230,14 +234,17 @@ def array_coding_to_kron(arr, type):
 
     return expr2
 
+
+
 def create_TFIM(n_qubits, g):
 
   if n_qubits == 2:
-    return -1*np.kron(Z,Z) -g*(np.kron(X,I)+np.kron(I,X)), {0: [np.kron(Z,Z)], 1: [np.kron(X,I),np.kron(I,X)]}
+    return -1*np.kron(Z,Z) -g*(np.kron(X,I)+np.kron(I,X)), {0: [np.kron(Z,Z)], 1: [np.kron(X,I),np.kron(I,X)]}, {0: [np.kron(Y,Z)], 1: [np.kron(Y,I), np.kron(I,Y)]}
 
   else:
     #This will store all the kronecker products used in Ansatz Layers
-    comps = {0:[],1:[]}
+    comps = {0:[], 1:[]}
+    real_comps = {0:[], 1:[]}
 
     #Initializing an empty 
     tfim = np.zeros((2**n_qubits,2**n_qubits))
@@ -266,40 +273,91 @@ def create_TFIM(n_qubits, g):
       tfim = tfim -g* array_coding_to_kron(x_arr,type='X')
       #Append component
       comps[1].append(array_coding_to_kron(x_arr,type='X'))
+      
+      
+    #Y Terms
+    for i in range(n_qubits):
+        y_arr = np.zeros(n_qubits)
+        y_arr[i]  = 1
+        
+        #Call encoding and append
+        real_comps[1].append(array_coding_to_kron(y_arr,type='Y'))
+        
+    #YZ terms
+    for i in range(n_qubits):
+      yz_arr = np.zeros(n_qubits)
+      if i < n_qubits - 1:
+        yz_arr[i] = -1          #-1 means Y
+        yz_arr[i+1] = 1         # 1 means Z
+      else:
+        yz_arr[0] = 1
+        yz_arr[i] = -1
+        
+    #Append component
+      real_comps[0].append(array_coding_to_kron(yz_arr,type='YZ'))
 
-    return tfim, comps
+    return tfim, comps, real_comps
 
 
 
-#Harrow Napp
+#This funaction calculates the overlap of the solution with analytical ground state.
+def overlap_calculator(min_pm, ground_st):
+    return np.abs(np.vdot(min_pm, ground_st))**2
+    
+def power_computation(H, circuit_input):
+    return (1/(LA.norm(H@circuit_input)))*(H@circuit_input)
 
-#Helper functions to compute derivative
+def energy_raw(H,psi):
+    return np.real((psi.conj().T)@H@psi)[0][0]
 
-def all_X(X_components,param,n_qubits):
-  X = np.eye(2**n_qubits)
-  for component in X_components:
-    X = CU(component,param,n_qubits=n_qubits)@X
-  return X
+def get_eta(eta_in, grad_prev, grad_now):
+    return eta_in*grad_now/grad_prev
+
+#Expectation
+def energy_VHA(H,real_comps, circuit_input, YZ_param_set, Y_param_set, n_qubits , layers):
+  psi = ansatz_real(YZ_param_set = YZ_param_set, Y_param_set = Y_param_set, real_comps = real_comps, 
+                   n_qubits = n_qubits, layers=layers)@circuit_input
+  return np.real((psi.conj().T)@H@psi)[0][0]
+
+#Overlap
+def overlap_calculator2(n_qubits, min_gd,eigen_values, eigen_vectors):
+  overlap_store = []
+  for i in range(n_qubits): #Hardcoded
+    overlap_store.append(np.abs(np.vdot(min_gd,eigen_vectors[:,i]))**2)
+    print('For Eigen Value ',eigen_values[i], 'overlap = ',np.abs(np.vdot(min_gd,eigen_vectors[:,i]))**2)
+    print('===============================================')
+    
+  return None
 
 
-def all_ZZ(ZZ_components,param,n_qubits):
-  ZZ = np.eye(2**n_qubits)
-  for component in ZZ_components:
-    ZZ = CU(component,param,n_qubits=n_qubits)@ZZ
-  return ZZ
 
 
-#Gradient - Harrow Napp
-def grad_harrow_napp(H, X_param_set, ZZ_param_set,components, circuit_input, n_qubits,layers):
+
+def all_Y(Y_components,param,n_qubits):
+  Y = np.eye(2**n_qubits)
+  for component in Y_components:
+    Y = CU(component,param,n_qubits=n_qubits)@Y
+  return Y
+
+
+def all_YZ(YZ_components,param,n_qubits):
+  YZ = np.eye(2**n_qubits)
+  for component in YZ_components:
+    YZ = CU(component,param,n_qubits=n_qubits)@YZ
+  return YZ
+
+
+
+def grad_harrow_napp(H, YZ_param_set, Y_param_set, components, real_comps, circuit_input, n_qubits,layers):
 
   #Prepare the common right hand side for the Harrow Napp Expression
-  H_psi_right = H@ansatz_vha(X_param_set = X_param_set, ZZ_param_set = ZZ_param_set, 
-                             components = components, n_qubits = n_qubits, 
+  H_psi_right = H@ansatz_real(YZ_param_set = YZ_param_set, Y_param_set = Y_param_set, 
+                             real_comps= real_comps, n_qubits = n_qubits, 
                              layers = layers)@circuit_input
 
 
   #Sum the ZZ and X components
-  sum_ZZ, sum_X = component_sums(components, n_qubits=n_qubits) #This is implemented via a function call.
+  sum_ZZ, sum_X, sum_Y, sum_YZ = component_sums(components, real_comps, n_qubits=n_qubits) #This is implemented via a function call.
   
   #Total parameters
   param_per_layer =  2
@@ -307,127 +365,128 @@ def grad_harrow_napp(H, X_param_set, ZZ_param_set,components, circuit_input, n_q
 
   #Derivative Expression for each param
 
-  #ZZ params
+  #YZ params
 
-  #Loop through all ZZ params
+  #Loop through all YZ params
   for j in range(layers):
-    #initialize computation for the jth ZZ derivative
-    psi_left_d_ZZ = circuit_input
+    #initialize computation for the jth YZ derivative
+    psi_left_d_YZ = circuit_input
 
-    #This inner loop is to loop through the circuit elements, only one of the ZZ elements will have a derivative 
+    #This inner loop is to loop through the circuit elements, only one of the YZ elements will have a derivative 
     for i in range(layers):
 
-      all_Xs = all_X(components[1],X_param_set[i],n_qubits=n_qubits)
-      all_ZZs = all_ZZ(components[0],ZZ_param_set[i],n_qubits=n_qubits)
+      all_Ys = all_Y(real_comps[1],Y_param_set[i],n_qubits=n_qubits)
+      all_YZs = all_YZ(real_comps[0],YZ_param_set[i],n_qubits=n_qubits)
 
       if i == j:
-        psi_left_d_ZZ = all_Xs@all_ZZs@sum_ZZ@psi_left_d_ZZ
+        psi_left_d_YZ = all_Ys@all_YZs@(sum_YZ)@psi_left_d_YZ
       else:
-        psi_left_d_ZZ = all_Xs@all_ZZs@psi_left_d_ZZ
+        psi_left_d_YZ = all_Ys@all_YZs@psi_left_d_YZ
 
     #Store
-    full_derivative[j*param_per_layer] = -2*np.imag((psi_left_d_ZZ.conj().T)@H_psi_right)
+    full_derivative[j*param_per_layer] = -2*np.imag((psi_left_d_YZ.conj().T)@H_psi_right)
 
 
-  #X params
+  #Y params
   for k in range(layers):
     #initialize computation for the kth X derivative
-    psi_left_d_X = circuit_input
+    psi_left_d_Y = circuit_input
 
     #This inner loop is to loop through the circuit elements, only one of the X elements will have a derivative 
     for l in range(layers):
     
-      all_ZZs = all_ZZ(components[0],ZZ_param_set[l],n_qubits=n_qubits)
-      all_Xs = all_X(components[1],X_param_set[l],n_qubits=n_qubits)
+      all_YZs = all_YZ(real_comps[0],YZ_param_set[l],n_qubits=n_qubits)
+      all_Ys = all_Y(real_comps[1],Y_param_set[l],n_qubits=n_qubits)
   
       if l == k:
-        psi_left_d_X = all_Xs@sum_X@all_ZZs@psi_left_d_X
+        psi_left_d_Y = all_Ys@(sum_Y)@all_YZs@psi_left_d_Y
       else:
-        psi_left_d_X = all_Xs@all_ZZs@psi_left_d_X
+        psi_left_d_Y = all_Ys@all_YZs@psi_left_d_Y
 
     #Store
-    full_derivative[k*param_per_layer+1] = -2*np.imag((psi_left_d_X.conj().T)@H_psi_right)
+    full_derivative[k*param_per_layer+1] = -2*np.imag((psi_left_d_Y.conj().T)@H_psi_right)
 
   #Return all partial derivatives
   return full_derivative
 
 
 def grad_positioning(grad):
-  ZZ = []
-  X = []
-  for i in range(len(grad)):
-    if i%2 == 0:
-      ZZ.append(grad[i])
-    else:
-      X.append(grad[i])
-  return np.array(ZZ), np.array(X)
+    YZ = []
+    Y = []
+    for i in range(len(grad)):
+        if i%2 == 0:
+            YZ.append(grad[i])
+        else:
+            Y.append(grad[i])
+    return np.array(YZ), np.array(Y)
 
 
-def get_eta(eta_in, grad_prev, grad_now):
-    return eta_in*grad_now/grad_prev
-    
 
-def hn_grad_desc_quantum(H, components, X_param_set, ZZ_param_set, circuit_input, MAXITERS, ETA, GRADTOL, n_qubits, layers, time_start, log_freq = 1, plotting = 'off', logging = 'on', adapt=False):
+def hn_grad_desc_quantum(H, components, real_comps, Y_param_set, YZ_param_set, circuit_input, MAXITERS, eta, GRADTOL, n_qubits, layers, time_start, log_freq = 1, plotting = 'off', logging = 'on', adapt=False):
 
+  num_params = 2*len(Y_param_set)
+  
   store_grad_norm = []
   store_energy = []
-  eta_now = ETA
+
+  eta_now = eta
   
+  #Get Ground State
+  emin, vmin = get_analytical_ground_state(H)
+
   #Theta is a vector - np.array
-  theta_X = X_param_set.copy() 
-  theta_ZZ = ZZ_param_set.copy()
+  theta_Y = Y_param_set.copy() 
+  theta_YZ = YZ_param_set.copy()
   
   #Keep track of number of iterations
   counter = 0 
 
   #Iterate
   for iter in range(MAXITERS):
-
-    grad = grad_harrow_napp(H=H,X_param_set=theta_X,ZZ_param_set=theta_ZZ,components=components,
+    
+    grad = grad_harrow_napp(H=H,YZ_param_set=theta_YZ,Y_param_set=theta_Y,components=components, real_comps = real_comps,
                             circuit_input=circuit_input ,n_qubits=n_qubits,layers=layers)
     
     if LA.norm(grad) < GRADTOL:
       break
 
     #Extract components - This is to correctly order gradient components
-    ZZ, X = grad_positioning(grad)
-    
+    YZ, Y = grad_positioning(grad)
+   
     if counter > 0 and adapt==True:
         eta_now = get_eta(eta_now,store_grad_norm[-1],LA.norm(grad))
     else:
-        eta_now = ETA
-
-    #Update thetas
-    theta_ZZ = theta_ZZ - eta_now*ZZ
-    theta_X = theta_X - eta_now*X
+        eta_now = eta
+   
+    theta_YZ = theta_YZ - eta_now*YZ
+    theta_Y = theta_Y - eta_now*Y
     
     #Eigenvector
-    v = ansatz_vha(X_param_set = theta_X, ZZ_param_set = theta_ZZ, components=components, n_qubits=n_qubits, layers=layers)@circuit_input
+    v = ansatz_real(Y_param_set = theta_Y, YZ_param_set = theta_YZ, real_comps=real_comps, n_qubits=n_qubits, layers=layers)@circuit_input
 
     #Eigenvalue
-    e = energy_VHA(H = H ,components = components, circuit_input = circuit_input, X_param_set=theta_X, ZZ_param_set=theta_ZZ, 
+    e = energy_VHA(H = H ,real_comps = real_comps, circuit_input = circuit_input, YZ_param_set=theta_YZ, Y_param_set=theta_Y, 
                    n_qubits = n_qubits, layers = layers)
 
-    
+    #Keep track of number of iterations
+    counter += 1
     
     if logging == 'on':
         if counter%log_freq == 0:
             vals_now = EMEntry(owner = 'R', n_qubits = n_qubits, g = g, layers = layers, ETA = ETA, MAX_ITER = MAX_ITER,
                                 init_type = btype, iter = counter, overlap = ov, energy = ev, 
-                                  norm_grad = LA.norm(grad) , vector = str(v), angles = str([theta_ZZ,theta_X]), 
+                                  norm_grad = LA.norm(grad) , vector = str(v), angles = str([theta_YZ,theta_Y]), 
                                     log_start_time = time_start, 
-                                        atype = 'hva')  
+                                        atype = 'real')  
     
             session.add(vals_now)  
             session.commit()
             
-    #Keep track of number of iterations
-    counter += 1
     
     #Store Gradient Norm and Energy
     store_grad_norm.append(LA.norm(grad))
     store_energy.append(e)
-  
+
   
   #Some Plotting
   if plotting == 'on':
@@ -443,12 +502,12 @@ def hn_grad_desc_quantum(H, components, X_param_set, ZZ_param_set, circuit_input
     plt.ylabel('Minimum Eigen Value attained')
     plt.show()
 
-  return [theta_ZZ,theta_X], counter, e, v, LA.norm(grad)
-
+  return [theta_YZ,theta_Y], counter, e, v, LA.norm(grad)
 
 
 
 #%%
+
 
 
 ##################################
@@ -485,10 +544,10 @@ for n_qubits in [4,6,8]:
                 TOL = 0.0001                                      # Just an initialization. Don't change
                 
                 #Create the TFIM Model
-                H, components = create_TFIM(n_qubits = n_qubits, g = g)
+                H, components, real_comps = create_TFIM(n_qubits = n_qubits, g = g)
                 
-                ZZ_param_set = (pi/3)*np.ones(layers) 
-                X_param_set = (pi/3)*np.ones(layers)
+                YZ_param_set = (pi/3)*np.ones(layers) 
+                Y_param_set = (pi/3)*np.ones(layers)
                 
                 
                 #get analytical ground state
@@ -505,7 +564,7 @@ for n_qubits in [4,6,8]:
     
              
                 round_start_time = time.time()
-                p, cnt , eig, vec, grad = hn_grad_desc_quantum(H, components, X_param_set, ZZ_param_set, b0_e, MAX_ITER, ETA, TOL, n_qubits, layers, time_start=tstart ,plotting = 'off', logging = 'on')
+                p, cnt , eig, vec, grad = hn_grad_desc_quantum(H, components, real_comps, Y_param_set, YZ_param_set, b0_e, MAX_ITER, ETA, TOL, n_qubits, layers, time_start=tstart ,plotting = 'off', logging = 'on')
                 round_end_time = time.time()
                 round_time = (round_end_time - round_start_time)/60
                 
@@ -517,7 +576,7 @@ for n_qubits in [4,6,8]:
                 #Log at round level
                 vals_round = EMSummary(owner = OWNER, n_qubits = n_qubits, g = g, layers = layers, ETA = ETA, MAX_ITER = MAX_ITER,
                                       init_type = btype, NUMITERS = cnt, overlap = ov, energy = ev, 
-                                      ansatz = str(vec), params = str(p), log_start_time = tstart, total_time = round_time , atype = 'hva')  
+                                      ansatz = str(vec), params = str(p), log_start_time = tstart, total_time = round_time , atype = 'real')  
     
                 session.add(vals_round)  
                 session.commit()
@@ -528,4 +587,3 @@ for n_qubits in [4,6,8]:
 
 #Close Database Session
 session.close()
-# %%
